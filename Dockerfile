@@ -2,6 +2,9 @@
 # Same Python minor version the model was trained with (pinned scikit-learn needs it).
 FROM python:3.13-slim
 
+# Links the published image on ghcr.io to this repository.
+LABEL org.opencontainers.image.source="https://github.com/plum5522/fraudshieldv2"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1

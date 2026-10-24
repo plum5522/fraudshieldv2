@@ -6,7 +6,10 @@
 #   bash deploy/azure-deploy.sh
 #
 # Safe to re-run: existing resources are reused, secrets are kept in deploy/.azure.env
-# (gitignored). The image is built in Azure (ACR Tasks), so no local Docker is needed.
+# (gitignored). The image is NOT built here: GitHub Actions builds, tests and publishes it to
+# ghcr.io, and Azure pulls that exact image. (Student subscriptions block ACR Tasks builds.)
+#
+# Deploy a specific commit:  IMAGE_TAG=<git sha> bash deploy/azure-deploy.sh
 set -euo pipefail
 
 STATE=deploy/.azure.env
@@ -20,6 +23,8 @@ PG=${PG:-fraudshield-db-$RANDOM$RANDOM}           # must be globally unique
 PG_USER=${PG_USER:-fsadmin}
 PG_PASS=${PG_PASS:-Fs$(openssl rand -hex 16)}       # upper + lower + digits, URL-safe
 REPORTER_SECRET=${REPORTER_SECRET:-$(openssl rand -hex 32)}
+IMAGE_TAG=${IMAGE_TAG:-$(git rev-parse HEAD)}   # this checkout's commit, as published by CI
+IMAGE=ghcr.io/plum5522/fraudshieldv2:$IMAGE_TAG
 
 cat > "$STATE" <<EOF
 RG=$RG
@@ -37,7 +42,7 @@ step() { printf '\n==> %s\n' "$1"; }
 
 step "Azure CLI extension and providers"
 az extension add --name containerapp --upgrade --only-show-errors
-for p in Microsoft.App Microsoft.OperationalInsights Microsoft.DBforPostgreSQL Microsoft.ContainerRegistry; do
+for p in Microsoft.App Microsoft.OperationalInsights Microsoft.DBforPostgreSQL; do
   az provider register --namespace "$p" --only-show-errors >/dev/null
 done
 
@@ -59,22 +64,37 @@ fi
 
 DB_URL="postgresql+psycopg://${PG_USER}:${PG_PASS}@${PG}.postgres.database.azure.com:5432/fraudshield?sslmode=require"
 
-step "Build the image in Azure and create the Container App - takes ~5 min"
-# First revision boots on a temporary SQLite file so it is healthy; the next step switches
-# it to Postgres with secrets.
-az containerapp up -n "$APP" -g "$RG" -l "$LOC" --environment "$CAE" \
-  --source . --ingress external --target-port 8000 \
-  --env-vars DATABASE_URL=sqlite:////tmp/boot.db
-# (no --only-show-errors / -o here: `containerapp up` rejects them, so it prints progress)
+step "Checking that CI published $IMAGE"
+if ! docker_manifest=$(curl -sf -H "Authorization: Bearer $(curl -sf 'https://ghcr.io/token?scope=repository:plum5522/fraudshieldv2:pull' | sed -E 's/.*"token":"([^"]+)".*/\1/')" \
+     -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+     "https://ghcr.io/v2/plum5522/fraudshieldv2/manifests/$IMAGE_TAG"); then
+  echo "Image not found or not public: $IMAGE"
+  echo "  1. Check the CI run for this commit is green: https://github.com/plum5522/fraudshieldv2/actions"
+  echo "  2. Make the package public: https://github.com/users/plum5522/packages/container/fraudshieldv2/settings"
+  exit 1
+fi
 
-step "Secrets and production settings"
-az containerapp secret set -n "$APP" -g "$RG" \
-  --secrets db-url="$DB_URL" reporter-secret="$REPORTER_SECRET" --only-show-errors -o none
+step "Container Apps environment $CAE"
+if ! az containerapp env show -n "$CAE" -g "$RG" -o none 2>/dev/null; then
+  az containerapp env create -n "$CAE" -g "$RG" -l "$LOC" --only-show-errors -o none
+fi
+
 # max-replicas 1: the rate limiter keeps its counts in memory (one instance = correct counts).
 # min-replicas 0: scales to zero when idle (near-free), first request after idle is slower.
-az containerapp update -n "$APP" -g "$RG" \
-  --set-env-vars DATABASE_URL=secretref:db-url REPORTER_SECRET=secretref:reporter-secret \
-  --min-replicas 0 --max-replicas 1 --only-show-errors -o none
+step "Container App $APP from $IMAGE"
+if az containerapp show -n "$APP" -g "$RG" -o none 2>/dev/null; then
+  az containerapp secret set -n "$APP" -g "$RG" \
+    --secrets db-url="$DB_URL" reporter-secret="$REPORTER_SECRET" --only-show-errors -o none
+  az containerapp update -n "$APP" -g "$RG" --image "$IMAGE" \
+    --set-env-vars DATABASE_URL=secretref:db-url REPORTER_SECRET=secretref:reporter-secret \
+    --min-replicas 0 --max-replicas 1 --only-show-errors -o none
+else
+  az containerapp create -n "$APP" -g "$RG" --environment "$CAE" --image "$IMAGE" \
+    --ingress external --target-port 8000 --cpu 0.5 --memory 1.0Gi \
+    --secrets db-url="$DB_URL" reporter-secret="$REPORTER_SECRET" \
+    --env-vars DATABASE_URL=secretref:db-url REPORTER_SECRET=secretref:reporter-secret \
+    --min-replicas 0 --max-replicas 1 --only-show-errors -o none
+fi
 
 FQDN=$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)
 
@@ -94,6 +114,6 @@ Done.
 Secrets are saved in $STATE (never commit it).
 To save credits when not demoing:   az postgres flexible-server stop -g $RG -n $PG
 Start it again before a demo:       az postgres flexible-server start -g $RG -n $PG
-Redeploy after a code change:       az containerapp up -n $APP -g $RG --source .
+Redeploy after a code change:       git pull && bash deploy/azure-deploy.sh   (after CI is green)
 Delete everything:                  az group delete -n $RG
 EOF

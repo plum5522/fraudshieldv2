@@ -42,6 +42,9 @@ jobs:
     name: Build and smoke-test the image
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: read
+      packages: write   # publish to GitHub Container Registry (ghcr.io)
 
     steps:
       - uses: actions/checkout@v5
@@ -66,3 +69,17 @@ jobs:
       - name: Show container logs on failure
         if: failure()
         run: docker logs api
+
+      # Only images that passed every test and the smoke test get published, and only from main.
+      # Azure pulls from here: build once in CI, deploy that exact image.
+      - name: Publish to ghcr.io
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag fraudshield:ci "$IMAGE:${{ github.sha }}"
+          docker tag fraudshield:ci "$IMAGE:latest"
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
+          echo "Published $IMAGE:${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"

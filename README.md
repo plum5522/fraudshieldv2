@@ -92,7 +92,7 @@ git clone https://github.com/plum5522/fraudshieldv2 && cd fraudshieldv2
 bash deploy/azure-deploy.sh
 ```
 
-The image is built inside Azure, secrets live in Container App secrets, and the app refuses
+The image is built and tested in GitHub Actions and pulled from ghcr.io by commit SHA. Secrets live in Container App secrets, and the app refuses
 to start against a real database without its own `REPORTER_SECRET`. Max replicas is 1 because the
 rate limiter is in-memory; scaling out means moving it to Redis first.
 
@@ -104,6 +104,7 @@ rate limiter is in-memory; scaling out means moving it to Redis first.
 - **Counts are computed on read**, not stored in a counter column that could drift.
 - **No message text is stored**, only identifiers. Reporter IDs are stored as HMAC-SHA256 with a server secret.
 - **Sliding-window rate limits** on reports (10/hour per reporter, 30/hour per IP), checked before any database work. In-memory, so single-instance only; Redis is the multi-instance answer.
+- **Build once, deploy that exact image**: CI publishes to ghcr.io only after all tests and a smoke test pass; Azure pulls the image by commit SHA.
 - **Trusted domains** (gov.in, banks, major platforms) can never collect reports.
 - **Train/test split by template**, not by row: the synthetic data reuses templates with different names and numbers, so a random split would test memorisation.
 - **One `prepare_for_model()` function** is used by both training and the API, so they can't drift apart (training/serving skew).
