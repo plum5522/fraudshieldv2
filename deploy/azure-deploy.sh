@@ -52,7 +52,10 @@ if ! az postgres flexible-server show -g "$RG" -n "$PG" -o none 2>/dev/null; the
     --public-access 0.0.0.0 --yes --only-show-errors -o none
   # 0.0.0.0 = allow connections from Azure services only (our container), not the internet.
 fi
-az postgres flexible-server db create -g "$RG" -s "$PG" -d fraudshield --only-show-errors -o none
+step "Database 'fraudshield' on $PG"
+if ! az postgres flexible-server db show -g "$RG" --server-name "$PG" --name fraudshield -o none 2>/dev/null; then
+  az postgres flexible-server db create -g "$RG" --server-name "$PG" --name fraudshield --only-show-errors -o none
+fi
 
 DB_URL="postgresql+psycopg://${PG_USER}:${PG_PASS}@${PG}.postgres.database.azure.com:5432/fraudshield?sslmode=require"
 
