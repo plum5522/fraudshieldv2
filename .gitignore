@@ -4,3 +4,6 @@ __pycache__/
 .env
 *.db
 .pytest_cache/
+
+# private real messages (personal data) never go to GitHub
+data/real/private*

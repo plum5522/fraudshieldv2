@@ -1,0 +1,106 @@
+{
+  "model_version": "tfidf-lr-20261024",
+  "data": {
+    "messages": 3722,
+    "templates": 2884,
+    "by_source": {
+      "india14": 2142,
+      "audited": 1580
+    }
+  },
+  "grouped_test": {
+    "n": 792,
+    "auc": 0.9971,
+    "precision": 0.9728,
+    "recall": 0.9808,
+    "false_positive_rate": 0.0234,
+    "brier": 0.0248,
+    "confusion": {
+      "tn": 417,
+      "fp": 10,
+      "fn": 7,
+      "tp": 358
+    }
+  },
+  "cross_source": {
+    "test_on_audited": {
+      "n": 1580,
+      "auc": 0.9194,
+      "precision": 0.7243,
+      "recall": 0.9561,
+      "false_positive_rate": 0.3704,
+      "brier": 0.1424,
+      "confusion": {
+        "tn": 493,
+        "fp": 290,
+        "fn": 35,
+        "tp": 762
+      }
+    },
+    "test_on_india14": {
+      "n": 2142,
+      "auc": 0.9649,
+      "precision": 0.9679,
+      "recall": 0.7492,
+      "false_positive_rate": 0.0175,
+      "brier": 0.0861,
+      "confusion": {
+        "tn": 1235,
+        "fp": 22,
+        "fn": 222,
+        "tp": 663
+      }
+    }
+  },
+  "real_scams": {
+    "n": 9,
+    "caught_at_0.5": 8,
+    "probabilities": [
+      0.699,
+      0.653,
+      0.909,
+      0.953,
+      0.904,
+      0.988,
+      0.325,
+      0.834,
+      0.511
+    ]
+  },
+  "top_features": {
+    "scam": [
+      "url",
+      "phone",
+      "कर",
+      "to",
+      "verify",
+      " <",
+      "link",
+      "00 000",
+      "> ",
+      "fee",
+      "000",
+      "otp",
+      "number",
+      "नह",
+      " <u"
+    ],
+    "legit": [
+      "for",
+      "branch",
+      "visit",
+      "order",
+      "check",
+      "date",
+      "ki",
+      "transaction id",
+      "emi",
+      "on 00",
+      "kal",
+      "on",
+      "00",
+      "not share",
+      "fo"
+    ]
+  }
+}

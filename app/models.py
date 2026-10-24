@@ -31,7 +31,13 @@ class CheckedEntity(EntityOut):
 
 
 class CheckResponse(BaseModel):
+    verdict: Literal["safe", "suspicious", "likely_scam", "confirmed_scam"]
+    probability: float        # fused: text + reports
+    text_probability: float   # the classifier alone
+    reporters: int            # people who reported the most-reported identifier (30 days)
+    reasons: list[str]        # plain-language explanation for the user
     entities: list[CheckedEntity]
+    model_version: str
 
 
 class ReportRequest(BaseModel):

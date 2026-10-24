@@ -108,14 +108,18 @@ def extract_entities(text: str) -> list[Entity]:
 _MASK = {"upi": "<UPI>", "phone": "<PHONE>", "domain": "<URL>", "shortlink": "<URL>"}
 
 
-def mask_entities(text: str) -> str:
-    """Replace every identifier with a placeholder, for the classifier."""
+def mask_entities(text: str, placeholder=None) -> str:
+    """Replace every identifier with a placeholder, for the classifier.
+
+    `placeholder(entity)` may return a custom token (e.g. <SAFE_URL> for official sites);
+    returning None falls back to the default token for that kind.
+    """
     out, pos = [], 0
     for start, end, ent in _find(text):
         if start < pos:  # overlapping match already masked
             continue
         out.append(text[pos:start])
-        out.append(_MASK[ent.kind])
+        out.append((placeholder and placeholder(ent)) or _MASK[ent.kind])
         pos = end
     out.append(text[pos:])
     return "".join(out)

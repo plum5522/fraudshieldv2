@@ -7,9 +7,11 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app import reports
+from app.classifier import TextClassifier, get_classifier
 from app.config import settings
 from app.db import get_session, init_db
 from app.extract import clean_message, extract_entities
+from app.fusion import fuse
 from app.models import (CheckedEntity, CheckRequest, CheckResponse, EntityHistory, EntityOut,
                         ReportRequest, ReportResponse)
 from app.ratelimit import SlidingWindowLimiter
@@ -21,6 +23,7 @@ HOUR = 3600
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    get_classifier()  # load the model at startup, not on the first user's request
     # Created per app start, stored on app.state (each test client gets fresh limiters).
     app.state.reporter_limiter = SlidingWindowLimiter(settings.reports_per_reporter_per_hour, HOUR)
     app.state.ip_limiter = SlidingWindowLimiter(settings.reports_per_ip_per_hour, HOUR)
@@ -50,20 +53,47 @@ def _out(e) -> EntityOut:
 
 @app.get("/v1/health")
 def health() -> dict:
-    return {"status": "ok", "version": app.version}
+    return {"status": "ok", "version": app.version, "model_version": get_classifier().version}
 
 
 @app.post("/v1/check", response_model=CheckResponse)
-def check(req: CheckRequest, session: Session = Depends(get_session)) -> CheckResponse:
-    """Network half of the verdict for now; the text model and fusion are added next."""
+def check(req: CheckRequest, session: Session = Depends(get_session),
+          classifier: TextClassifier = Depends(get_classifier)) -> CheckResponse:
+    """Fused verdict: what the text says + what people have reported."""
     entities = extract_entities(clean_message(req.message))
     untrusted = [e for e in entities if not is_trusted(e)]
     counts = reports.reporter_counts(session, untrusted)
-    return CheckResponse(entities=[
-        CheckedEntity(kind=e.kind, value=e.value, trusted=is_trusted(e),
-                      reporters_recent=counts.get(e.key, 0))
-        for e in entities
-    ])
+
+    text_p = classifier.scam_probability(req.message)
+    top = max(untrusted, key=lambda e: counts[e.key], default=None)
+    reporters = counts[top.key] if top else 0
+    v = fuse(text_p, reporters)
+
+    return CheckResponse(
+        verdict=v.tier, probability=v.probability, text_probability=v.text_probability,
+        reporters=reporters, reasons=_reasons(v, top, entities),
+        entities=[CheckedEntity(kind=e.kind, value=e.value, trusted=is_trusted(e),
+                                reporters_recent=counts.get(e.key, 0)) for e in entities],
+        model_version=classifier.version,
+    )
+
+
+def _reasons(v, top, entities) -> list[str]:
+    reasons = []
+    if v.text_probability >= 0.7:
+        reasons.append(f"The wording matches known scam messages ({v.text_probability:.0%}).")
+    elif v.text_probability >= 0.3:
+        reasons.append(f"The wording looks somewhat like scam messages ({v.text_probability:.0%}).")
+    else:
+        reasons.append("The wording looks like a normal message.")
+    if top and v.reporters:
+        people = "person" if v.reporters == 1 else "people"
+        reasons.append(f"{top.value} was reported by {v.reporters} {people} in the last "
+                       f"{settings.report_window_days} days.")
+    trusted = [e.value for e in entities if is_trusted(e)]
+    if trusted:
+        reasons.append(f"Links to an official site: {', '.join(trusted)}.")
+    return reasons
 
 
 @app.post("/v1/reports", response_model=ReportResponse, status_code=201)
