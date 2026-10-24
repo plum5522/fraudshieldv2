@@ -3,21 +3,42 @@ No SQL and no business rules live here."""
 
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app import reports
+from app.config import settings
 from app.db import get_session, init_db
 from app.extract import clean_message, extract_entities
 from app.models import (CheckedEntity, CheckRequest, CheckResponse, EntityHistory, EntityOut,
                         ReportRequest, ReportResponse)
+from app.ratelimit import SlidingWindowLimiter
 from app.trust import hash_reporter, is_trusted
+
+HOUR = 3600
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # Created per app start, stored on app.state (each test client gets fresh limiters).
+    app.state.reporter_limiter = SlidingWindowLimiter(settings.reports_per_reporter_per_hour, HOUR)
+    app.state.ip_limiter = SlidingWindowLimiter(settings.reports_per_ip_per_hour, HOUR)
     yield
+
+
+def enforce_report_limits(request: Request, reporter_hash: str) -> None:
+    """Raise 429 Too Many Requests with a Retry-After header if either limit is hit.
+    Runs before any database work, so a flood never reaches Postgres."""
+    # Behind Azure's proxy, request.client.host is the client only if uvicorn runs with
+    # --proxy-headers (it then trusts X-Forwarded-For). See the Dockerfile.
+    ip = request.client.host if request.client else "unknown"
+    for limiter, key in ((request.app.state.ip_limiter, f"ip:{ip}"),
+                         (request.app.state.reporter_limiter, f"reporter:{reporter_hash}")):
+        allowed, retry_after = limiter.check(key)
+        if not allowed:
+            raise HTTPException(429, "Too many reports. Try again later.",
+                                headers={"Retry-After": str(retry_after)})
 
 
 app = FastAPI(title="FraudShield v2", version="2.0.0", lifespan=lifespan)
@@ -46,14 +67,18 @@ def check(req: CheckRequest, session: Session = Depends(get_session)) -> CheckRe
 
 
 @app.post("/v1/reports", response_model=ReportResponse, status_code=201)
-def create_report(req: ReportRequest, session: Session = Depends(get_session)) -> ReportResponse:
+def create_report(req: ReportRequest, request: Request,
+                  session: Session = Depends(get_session)) -> ReportResponse:
+    reporter_hash = hash_reporter(req.reporter_id)
+    enforce_report_limits(request, reporter_hash)
+
     entities = extract_entities(clean_message(req.message))
     trusted = [e for e in entities if is_trusted(e)]
     reportable = [e for e in entities if not is_trusted(e)]
     if not reportable:
         raise HTTPException(422, "No reportable UPI ID, phone number or link found in the message.")
 
-    outcome = reports.record_report(session, reportable, hash_reporter(req.reporter_id), req.category)
+    outcome = reports.record_report(session, reportable, reporter_hash, req.category)
     return ReportResponse(
         recorded=[_out(e) for e in reportable if outcome[e.key]],
         duplicates=[_out(e) for e in reportable if not outcome[e.key]],

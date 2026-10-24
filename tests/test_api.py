@@ -94,3 +94,28 @@ def test_entity_lookup_unknown_is_404(client):
 
 def test_entity_lookup_garbage_is_422(client):
     assert client.get("/v1/entities", params={"q": "hello there"}).status_code == 422
+
+
+# ---------- Rate limiting on /v1/reports ----------
+
+def test_reporter_rate_limit(client):
+    # Default: 10 reports per reporter per hour. Different messages, same person.
+    for i in range(10):
+        assert report(client, "spammy-device-01", f"Pay to scam{i:02d}@ybl now").status_code == 201
+    r = report(client, "spammy-device-01", "Pay to scam99@ybl now")
+    assert r.status_code == 429
+    assert int(r.headers["Retry-After"]) > 0
+    # The refused report never reached the database
+    assert client.get("/v1/entities", params={"q": "scam99@ybl"}).status_code == 404
+
+
+def test_ip_rate_limit_stops_fake_reporters(client):
+    # Default: 30 per IP per hour, even if every request claims a different reporter.
+    codes = [report(client, f"fake-reporter-{i:03d}").status_code for i in range(31)]
+    assert codes[:30] == [201] * 30
+    assert codes[30] == 429
+
+
+def test_check_is_not_rate_limited(client):
+    for _ in range(40):
+        assert client.post("/v1/check", json={"message": "pay to refund.desk@ybl"}).status_code == 200
