@@ -7,3 +7,4 @@ __pycache__/
 
 # private real messages (personal data) never go to GitHub
 data/real/private*
+deploy/.azure.env

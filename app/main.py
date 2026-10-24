@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import reports
 from app.classifier import TextClassifier, get_classifier
-from app.config import settings
+from app.config import check_production_safety, settings
 from app.db import get_session, init_db
 from app.extract import clean_message, extract_entities
 from app.fusion import fuse
@@ -22,6 +22,7 @@ HOUR = 3600
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    check_production_safety(settings)
     init_db()
     get_classifier()  # load the model at startup, not on the first user's request
     # Created per app start, stored on app.state (each test client gets fresh limiters).

@@ -1,5 +1,7 @@
 # FraudShield v2
 
+[![CI](https://github.com/plum5522/fraudshieldv2/actions/workflows/ci.yml/badge.svg)](https://github.com/plum5522/fraudshieldv2/actions/workflows/ci.yml)
+
 A scam-message checking API for India that judges a message on two signals at once:
 **what the text says** (a trained classifier) and **what other people have reported**
 about the UPI IDs, phone numbers and links inside it. One user's report protects the
@@ -17,7 +19,7 @@ next user, even when the scammer rewords the message.
 | Reports database: anti-poisoning, 30-day window, race-free inserts | Done |
 | Rate limiting on reports (sliding window, per reporter and per IP) | Done |
 | Text classifier (TF-IDF + logistic regression) and fused verdict | Done |
-| CI, Docker, Azure deploy | Planned |
+| CI (tests on real Postgres + Docker smoke test), Dockerfile, Azure deploy script | Done |
 
 ## How the verdict works
 
@@ -68,7 +70,7 @@ Interactive docs at `/docs` when running.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 uvicorn app.main:app --reload
 # open http://127.0.0.1:8000/docs
 ```
@@ -79,6 +81,20 @@ uvicorn app.main:app --reload
 pytest                                   # SQLite, fast
 TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost/fraudshield_test pytest   # real Postgres
 ```
+
+## Deploy (Azure)
+
+Azure Container Apps for the API, Azure Database for PostgreSQL Flexible Server for data.
+From Azure Cloud Shell:
+
+```bash
+git clone https://github.com/plum5522/fraudshieldv2 && cd fraudshieldv2
+bash deploy/azure-deploy.sh
+```
+
+The image is built inside Azure, secrets live in Container App secrets, and the app refuses
+to start against a real database without its own `REPORTER_SECRET`. Max replicas is 1 because the
+rate limiter is in-memory; scaling out means moving it to Redis first.
 
 ## Design decisions
 

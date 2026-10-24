@@ -1,0 +1,68 @@
+# Runs on every push and pull request. A red X on GitHub means: don't merge, don't deploy.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Tests (real PostgreSQL 16)
+    runs-on: ubuntu-latest
+
+    # A throwaway Postgres just for this run. SQLite alone once hid a real bug
+    # (ON CONFLICT row counts), so CI always tests against the production database.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fraudshield_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/fraudshield_test
+        run: pytest -q
+
+  docker:
+    name: Build and smoke-test the image
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: docker build -t fraudshield:ci .
+
+      - name: Start the container and check it answers
+        run: |
+          # Throwaway SQLite in /tmp for the smoke test; production sets a Postgres DATABASE_URL.
+          docker run -d --name api -p 8000:8000 -e DATABASE_URL=sqlite:////tmp/smoke.db fraudshield:ci
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/v1/health && break
+            sleep 1
+          done
+          curl -sf http://localhost:8000/v1/health | grep -q '"status":"ok"'
+          curl -sf -X POST http://localhost:8000/v1/check \
+            -H 'Content-Type: application/json' \
+            -d '{"message":"Your KYC is blocked, pay Rs 10 to verify at kyc.help@ybl"}' | tee /tmp/check.json
+          grep -q '"verdict"' /tmp/check.json
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs api
