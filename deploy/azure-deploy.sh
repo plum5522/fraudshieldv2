@@ -64,7 +64,8 @@ step "Build the image in Azure and create the Container App - takes ~5 min"
 # it to Postgres with secrets.
 az containerapp up -n "$APP" -g "$RG" -l "$LOC" --environment "$CAE" \
   --source . --ingress external --target-port 8000 \
-  --env-vars DATABASE_URL=sqlite:////tmp/boot.db --only-show-errors -o none
+  --env-vars DATABASE_URL=sqlite:////tmp/boot.db
+# (no --only-show-errors / -o here: `containerapp up` rejects them, so it prints progress)
 
 step "Secrets and production settings"
 az containerapp secret set -n "$APP" -g "$RG" \
